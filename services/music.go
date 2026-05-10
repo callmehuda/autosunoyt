@@ -28,6 +28,7 @@ type sunoGenerateRequest struct {
 	Instrumental bool   `json:"instrumental"`
 	Model        string `json:"model"`
 	Prompt       string `json:"prompt"`
+	CallBackUrl  string `json:"callBackUrl"`
 }
 
 type sunoGenerateResponse struct {
@@ -118,10 +119,11 @@ func (m *MusicService) GenerateMultiple(prompts []string, maxTokens, tokensPerRe
 
 func (m *MusicService) submitGenerate(prompt string) (string, error) {
 	body, _ := json.Marshal(sunoGenerateRequest{
-		CustomMode:   false, // Non-custom: hanya butuh prompt
-		Instrumental: true,  // Lo-fi = no vocals
+		CustomMode:   false,
+		Instrumental: true,
 		Model:        "V4_5ALL",
 		Prompt:       prompt,
+		CallBackUrl:  "https://example.com/callback", // wajib diisi, tapi kita pakai polling
 	})
 
 	req, err := http.NewRequest("POST", sunoAPIBase+"/generate", bytes.NewReader(body))
