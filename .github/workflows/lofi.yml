@@ -1,0 +1,47 @@
+name: Lo-Fi Daily Upload
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # Setiap hari jam 02:00 UTC (09:00 WIB)
+  workflow_dispatch:        # Manual trigger dari GitHub UI
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120    # Max 2 jam (music gen butuh waktu)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Install FFmpeg
+        run: sudo apt-get install -y ffmpeg
+
+      - name: Create output dirs
+        run: mkdir -p output gifs
+
+      - name: Run Pipeline
+        env:
+          GIPHY_API_KEY:      ${{ secrets.GIPHY_API_KEY }}
+          SUNO_API_KEY:       ${{ secrets.SUNO_API_KEY }}
+          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
+          YOUTUBE_TOKEN_FILE: ./token.json
+          MAX_TOKENS:         "50"
+          TOKENS_PER_REQUEST: "10"
+          GIFS_PER_KEYWORD:   "15"
+        run: |
+          echo '${{ secrets.YOUTUBE_TOKEN_JSON }}' > token.json
+          go mod tidy
+          go run main.go
+
+      - name: Upload artifact on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-output
+          path: output/
