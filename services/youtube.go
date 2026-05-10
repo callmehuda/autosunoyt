@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -30,7 +31,10 @@ func (y *YouTubeService) Upload(videoPath, title, desc string, tags []string) (s
 	// Baca client credentials (client_id, client_secret)
 	credBytes, err := os.ReadFile(y.CredentialsFile)
 	if err != nil {
-		return "", fmt.Errorf("baca credentials: %w", err)
+		return "", fmt.Errorf("baca credentials file %q: %w", y.CredentialsFile, err)
+	}
+	if len(bytes.TrimSpace(credBytes)) == 0 {
+		return "", fmt.Errorf("credentials file %q kosong — pastikan secret YOUTUBE_CREDENTIALS_JSON sudah diset di GitHub", y.CredentialsFile)
 	}
 
 	config, err := google.ConfigFromJSON(credBytes, youtube.YoutubeUploadScope)

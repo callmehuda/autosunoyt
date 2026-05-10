@@ -60,6 +60,7 @@ type geminiResponse struct {
 
 // models to try in order
 var geminiModels = []string{
+	"gemini-2.5-flash-preview-05-20",
 	"gemini-2.5-flash",
 }
 

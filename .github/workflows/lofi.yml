@@ -8,7 +8,6 @@ on:
 jobs:
   pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 120    # Max 2 jam (music gen butuh waktu)
 
     steps:
       - name: Checkout
@@ -22,19 +21,30 @@ jobs:
       - name: Install FFmpeg
         run: sudo apt-get install -y ffmpeg
 
-      - name: Create output dirs
-        run: mkdir -p output gifs
+      - name: Create output dir
+        run: mkdir -p output
+
+      - name: Validate secrets
+        run: |
+          missing=""
+          [ -z "${{ secrets.SUNO_API_KEY }}" ]              && missing="$missing SUNO_API_KEY"
+          [ -z "${{ secrets.GEMINI_API_KEY }}" ]            && missing="$missing GEMINI_API_KEY"
+          [ -z "${{ secrets.YOUTUBE_CREDENTIALS_JSON }}" ]  && missing="$missing YOUTUBE_CREDENTIALS_JSON"
+          [ -z "${{ secrets.YOUTUBE_TOKEN_JSON }}" ]        && missing="$missing YOUTUBE_TOKEN_JSON"
+          if [ -n "$missing" ]; then
+            echo "❌ Secret belum diset:$missing"
+            exit 1
+          fi
+          echo "✅ Semua secrets OK"
 
       - name: Run Pipeline
         env:
-          GIPHY_API_KEY:               ${{ secrets.GIPHY_API_KEY }}
           SUNO_API_KEY:                ${{ secrets.SUNO_API_KEY }}
           GEMINI_API_KEY:              ${{ secrets.GEMINI_API_KEY }}
           YOUTUBE_CREDENTIALS_FILE:    ./credentials.json
           YOUTUBE_TOKEN_FILE:          ./token.json
-          MAX_TOKENS:                  "50"
-          TOKENS_PER_REQUEST:          "10"
-          GIFS_PER_KEYWORD:            "15"
+          AUDIO_REQUESTS:              "3"
+          OUTPUT_DIR:                  "./output"
         run: |
           echo '${{ secrets.YOUTUBE_CREDENTIALS_JSON }}' > credentials.json
           echo '${{ secrets.YOUTUBE_TOKEN_JSON }}' > token.json

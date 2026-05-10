@@ -13,6 +13,11 @@ import (
 
 const sunoAPIBase = "https://api.sunoapi.org/api/v1"
 
+// Credit math:
+//   3 audio requests × 12 credits = 36 credits → 6 songs
+//   6 MV             ×  2 credits = 12 credits
+//   Total = 48 credits (dari 50)
+
 type MusicService struct {
 	APIKey    string
 	OutputDir string
@@ -22,7 +27,16 @@ func NewMusicService(apiKey, outputDir string) *MusicService {
 	return &MusicService{APIKey: apiKey, OutputDir: outputDir}
 }
 
-// sunoapi.org request — non-custom mode (hanya butuh prompt)
+// Song holds info about a generated track
+type Song struct {
+	ID       string
+	AudioURL string
+	Title    string
+	TaskID   string // parent audio task ID (dibutuhkan untuk MV)
+}
+
+// --- Audio generation structs ---
+
 type sunoGenerateRequest struct {
 	CustomMode   bool   `json:"customMode"`
 	Instrumental bool   `json:"instrumental"`
@@ -57,124 +71,156 @@ type sunoDetailResponse struct {
 	} `json:"data"`
 }
 
-// GenerateMultiple generates songs until token budget is exhausted.
-// sunoapi.org: 1 request = 10 token = 2 lagu.
-// Jadi 50 token = 5 request = 10 lagu.
-func (m *MusicService) GenerateMultiple(prompts []string, maxTokens, tokensPerRequest int) ([]string, error) {
-	numRequests := maxTokens / tokensPerRequest
-	if numRequests == 0 {
-		return nil, fmt.Errorf("token budget terlalu kecil: %d < %d per request", maxTokens, tokensPerRequest)
-	}
+// --- MV generation structs ---
 
-	totalSongs := numRequests * 2 // setiap request menghasilkan 2 lagu
-
-	fmt.Printf("💡 Token budget: %d | Per request: %d | Requests: %d | Expected songs: %d\n",
-		maxTokens, tokensPerRequest, numRequests, totalSongs)
-
-	var allPaths []string
-
-	for i := 0; i < numRequests; i++ {
-		prompt := prompts[i%len(prompts)]
-		fmt.Printf("\n🎵 [Request %d/%d] Prompt: %q\n", i+1, numRequests, prompt)
-
-		// Generate — returns taskId
-		taskID, err := m.submitGenerate(prompt)
-		if err != nil {
-			fmt.Printf("⚠️  Submit request %d failed: %v — skipping\n", i+1, err)
-			continue
-		}
-
-		fmt.Printf("   📋 TaskID: %s\n", taskID)
-
-		// Poll sampai SUCCESS
-		audioURLs, err := m.pollUntilReady(taskID)
-		if err != nil {
-			fmt.Printf("⚠️  Poll request %d failed: %v — skipping\n", i+1, err)
-			continue
-		}
-
-		// Download semua audio dari request ini (2 lagu)
-		for j, url := range audioURLs {
-			songIdx := i*2 + j
-			dest := filepath.Join(m.OutputDir, fmt.Sprintf("song_%d.mp3", songIdx))
-
-			fmt.Printf("   ⬇️  Downloading song %d: %s\n", songIdx+1, dest)
-			if err := streamDownload(url, dest); err != nil {
-				fmt.Printf("   ⚠️  Download failed: %v\n", err)
-				continue
-			}
-
-			allPaths = append(allPaths, dest)
-			fmt.Printf("   ✅ Song saved: %s\n", dest)
-		}
-	}
-
-	if len(allPaths) == 0 {
-		return nil, fmt.Errorf("semua song generation gagal")
-	}
-
-	fmt.Printf("\n🎶 Total songs generated: %d\n", len(allPaths))
-	return allPaths, nil
+type mvGenerateRequest struct {
+	TaskID      string `json:"taskId"`
+	AudioID     string `json:"audioId"`
+	CallBackUrl string `json:"callBackUrl"`
 }
 
-func (m *MusicService) submitGenerate(prompt string) (string, error) {
+type mvGenerateResponse struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Data struct {
+		TaskID string `json:"taskId"`
+	} `json:"data"`
+}
+
+type mvDetailResponse struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Data struct {
+		TaskID   string `json:"taskId"`
+		Status   string `json:"status"`
+		Response struct {
+			VideoUrl string `json:"videoUrl"`
+		} `json:"response"`
+		ErrorMessage string `json:"errorMessage"`
+	} `json:"data"`
+}
+
+// GenerateAndMakeMV generates NUM_AUDIO_REQUESTS audio tasks (2 songs each),
+// then generates MV for each song. Returns list of downloaded MP4 paths.
+func (m *MusicService) GenerateAndMakeMV(prompts []string, numAudioRequests int) ([]string, error) {
+	fmt.Printf("💡 Audio requests: %d → %d songs → %d credits audio + %d credits MV = %d total\n",
+		numAudioRequests,
+		numAudioRequests*2,
+		numAudioRequests*12,
+		numAudioRequests*2*2,
+		numAudioRequests*12+numAudioRequests*2*2,
+	)
+
+	// Step 1: Generate semua audio
+	var songs []Song
+	for i := 0; i < numAudioRequests; i++ {
+		prompt := prompts[i%len(prompts)]
+		fmt.Printf("\n🎵 [Audio %d/%d] Prompt: %q\n", i+1, numAudioRequests, prompt)
+
+		taskID, err := m.submitAudio(prompt)
+		if err != nil {
+			fmt.Printf("⚠️  Audio request %d failed: %v — skipping\n", i+1, err)
+			continue
+		}
+		fmt.Printf("   📋 TaskID: %s\n", taskID)
+
+		tracks, err := m.pollAudio(taskID)
+		if err != nil {
+			fmt.Printf("⚠️  Audio poll %d failed: %v — skipping\n", i+1, err)
+			continue
+		}
+
+		for _, t := range tracks {
+			t.TaskID = taskID
+			songs = append(songs, t)
+			fmt.Printf("   🎵 Song ready: %s (ID: %s)\n", t.Title, t.ID)
+		}
+	}
+
+	if len(songs) == 0 {
+		return nil, fmt.Errorf("tidak ada song yang berhasil di-generate")
+	}
+
+	fmt.Printf("\n🎶 Total songs: %d\n", len(songs))
+
+	// Step 2: Generate MV untuk setiap song
+	var mvPaths []string
+	for i, song := range songs {
+		fmt.Printf("\n🎬 [MV %d/%d] Song: %s\n", i+1, len(songs), song.Title)
+
+		mvTaskID, err := m.submitMV(song.TaskID, song.ID)
+		if err != nil {
+			fmt.Printf("⚠️  MV submit for song %d failed: %v — skipping\n", i+1, err)
+			continue
+		}
+		fmt.Printf("   📋 MV TaskID: %s\n", mvTaskID)
+
+		videoURL, err := m.pollMV(mvTaskID)
+		if err != nil {
+			fmt.Printf("⚠️  MV poll for song %d failed: %v — skipping\n", i+1, err)
+			continue
+		}
+
+		dest := filepath.Join(m.OutputDir, fmt.Sprintf("mv_%d.mp4", i))
+		fmt.Printf("   ⬇️  Downloading MV: %s\n", dest)
+		if err := streamDownload(videoURL, dest); err != nil {
+			fmt.Printf("⚠️  MV download failed: %v\n", err)
+			continue
+		}
+
+		mvPaths = append(mvPaths, dest)
+		fmt.Printf("   ✅ MV saved: %s\n", dest)
+	}
+
+	if len(mvPaths) == 0 {
+		return nil, fmt.Errorf("semua MV generation gagal")
+	}
+
+	fmt.Printf("\n🎞️  Total MVs downloaded: %d\n", len(mvPaths))
+	return mvPaths, nil
+}
+
+func (m *MusicService) submitAudio(prompt string) (string, error) {
 	body, _ := json.Marshal(sunoGenerateRequest{
 		CustomMode:   false,
 		Instrumental: true,
 		Model:        "V4_5ALL",
 		Prompt:       prompt,
-		CallBackUrl:  "https://example.com/callback", // wajib diisi, tapi kita pakai polling
+		CallBackUrl:  "https://example.com/callback",
 	})
 
-	req, err := http.NewRequest("POST", sunoAPIBase+"/generate", bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
+	req, _ := http.NewRequest("POST", sunoAPIBase+"/generate", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+m.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("http request: %w", err)
+		return "", fmt.Errorf("http: %w", err)
 	}
 	defer resp.Body.Close()
 
 	var result sunoGenerateResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("decode response: %w", err)
-	}
+	json.NewDecoder(resp.Body).Decode(&result)
 
 	if result.Code != 200 {
 		return "", fmt.Errorf("api error %d: %s", result.Code, result.Msg)
 	}
-
 	if result.Data.TaskID == "" {
-		return "", fmt.Errorf("empty taskId in response")
+		return "", fmt.Errorf("empty taskId")
 	}
-
 	return result.Data.TaskID, nil
 }
 
-func (m *MusicService) pollUntilReady(taskID string) ([]string, error) {
-	// Stream URL siap ~30-40 detik, full download URL siap ~2-3 menit
-	// Poll tiap 15 detik, max 6 menit
-	maxAttempts := 24 // 24 × 15s = 360s = 6 menit
-
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+func (m *MusicService) pollAudio(taskID string) ([]Song, error) {
+	for attempt := 1; attempt <= 30; attempt++ {
 		time.Sleep(15 * time.Second)
 
-		req, err := http.NewRequest("GET",
-			fmt.Sprintf("%s/generate/record-info?taskId=%s", sunoAPIBase, taskID),
-			nil,
-		)
-		if err != nil {
-			continue
-		}
+		req, _ := http.NewRequest("GET",
+			fmt.Sprintf("%s/generate/record-info?taskId=%s", sunoAPIBase, taskID), nil)
 		req.Header.Set("Authorization", "Bearer "+m.APIKey)
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
-			fmt.Printf("   ⚠️  Poll attempt %d failed: %v\n", attempt, err)
 			continue
 		}
 
@@ -182,30 +228,91 @@ func (m *MusicService) pollUntilReady(taskID string) ([]string, error) {
 		json.NewDecoder(resp.Body).Decode(&detail)
 		resp.Body.Close()
 
-		status := detail.Data.Status
-		fmt.Printf("   ⏳ [%d/%d] Status: %s\n", attempt, maxAttempts, status)
+		fmt.Printf("   ⏳ [%d/30] Status: %s\n", attempt, detail.Data.Status)
 
-		switch status {
+		switch detail.Data.Status {
 		case "SUCCESS":
-			var urls []string
-			for _, track := range detail.Data.Response.SunoData {
-				if track.AudioURL != "" {
-					fmt.Printf("   🎵 Track ready: %s (%.1fs)\n", track.Title, track.Duration)
-					urls = append(urls, track.AudioURL)
+			var songs []Song
+			for _, t := range detail.Data.Response.SunoData {
+				if t.AudioURL != "" {
+					songs = append(songs, Song{
+						ID:       t.ID,
+						AudioURL: t.AudioURL,
+						Title:    t.Title,
+					})
 				}
 			}
-			if len(urls) == 0 {
-				return nil, fmt.Errorf("SUCCESS tapi tidak ada audioUrl")
+			if len(songs) == 0 {
+				return nil, fmt.Errorf("SUCCESS tapi tidak ada audio")
 			}
-			return urls, nil
-
+			return songs, nil
 		case "CREATE_TASK_FAILED", "GENERATE_AUDIO_FAILED", "SENSITIVE_WORD_ERROR":
-			return nil, fmt.Errorf("generation failed: %s — %s", status, detail.Data.ErrorMessage)
+			return nil, fmt.Errorf("failed: %s", detail.Data.ErrorMessage)
 		}
-		// PENDING / TEXT_SUCCESS / FIRST_SUCCESS → lanjut polling
 	}
+	return nil, fmt.Errorf("timeout audio polling")
+}
 
-	return nil, fmt.Errorf("timeout: taskId %s tidak selesai dalam %d detik", taskID, maxAttempts*15)
+func (m *MusicService) submitMV(audioTaskID, audioID string) (string, error) {
+	body, _ := json.Marshal(mvGenerateRequest{
+		TaskID:      audioTaskID,
+		AudioID:     audioID,
+		CallBackUrl: "https://example.com/callback",
+	})
+
+	req, _ := http.NewRequest("POST", sunoAPIBase+"/mp4/generate", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+m.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("http: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result mvGenerateResponse
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	if result.Code != 200 {
+		return "", fmt.Errorf("api error %d: %s", result.Code, result.Msg)
+	}
+	if result.Data.TaskID == "" {
+		return "", fmt.Errorf("empty mv taskId")
+	}
+	return result.Data.TaskID, nil
+}
+
+func (m *MusicService) pollMV(taskID string) (string, error) {
+	// MV biasanya butuh 2-5 menit
+	for attempt := 1; attempt <= 30; attempt++ {
+		time.Sleep(15 * time.Second)
+
+		req, _ := http.NewRequest("GET",
+			fmt.Sprintf("%s/mp4/details?taskId=%s", sunoAPIBase, taskID), nil)
+		req.Header.Set("Authorization", "Bearer "+m.APIKey)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			continue
+		}
+
+		var detail mvDetailResponse
+		json.NewDecoder(resp.Body).Decode(&detail)
+		resp.Body.Close()
+
+		fmt.Printf("   ⏳ [%d/30] MV Status: %s\n", attempt, detail.Data.Status)
+
+		switch detail.Data.Status {
+		case "SUCCESS":
+			if detail.Data.Response.VideoUrl == "" {
+				return "", fmt.Errorf("SUCCESS tapi videoUrl kosong")
+			}
+			return detail.Data.Response.VideoUrl, nil
+		case "FAILED", "ERROR":
+			return "", fmt.Errorf("mv failed: %s", detail.Data.ErrorMessage)
+		}
+	}
+	return "", fmt.Errorf("timeout MV polling")
 }
 
 func streamDownload(url, dest string) error {

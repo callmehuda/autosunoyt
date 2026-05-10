@@ -7,34 +7,32 @@ import (
 )
 
 type Config struct {
-	GiphyAPIKey             string
-	SunoAPIKey              string
-	GeminiAPIKey            string
-	YoutubeCredentialsFile  string
-	YoutubeTokenFile        string
-	OutputDir        string
-	GifDir           string
+	GiphyAPIKey            string // tidak dipakai lagi, tapi dibiarkan agar tidak break
+	SunoAPIKey             string
+	GeminiAPIKey           string
+	YoutubeCredentialsFile string
+	YoutubeTokenFile       string
+	OutputDir              string
 
-	MaxTokens        int
-	TokensPerRequest int
-	MusicPrompts   []string
-	GifKeywords    []string
-	GifsPerKeyword int
+	// Credit math:
+	// AudioRequests × 12 credits = audio cost
+	// AudioRequests × 2 songs × 2 credits = MV cost
+	// Total = AudioRequests × (12 + 4) = AudioRequests × 16
+	// Dengan 3 requests: 3×16 = 48 credits (dari 50)
+	AudioRequests int
+
+	MusicPrompts []string
 }
 
 func Load() *Config {
 	return &Config{
-		GiphyAPIKey:            mustEnv("GIPHY_API_KEY"),
 		SunoAPIKey:             mustEnv("SUNO_API_KEY"),
 		GeminiAPIKey:           mustEnv("GEMINI_API_KEY"),
 		YoutubeCredentialsFile: getOr("YOUTUBE_CREDENTIALS_FILE", "./credentials.json"),
 		YoutubeTokenFile:       getOr("YOUTUBE_TOKEN_FILE", "./token.json"),
-		OutputDir:        getOr("OUTPUT_DIR", "./output"),
-		GifDir:           getOr("GIF_DIR", "./gifs"),
+		OutputDir:              getOr("OUTPUT_DIR", "./output"),
 
-		MaxTokens:        getInt("MAX_TOKENS", 50),
-		TokensPerRequest: getInt("TOKENS_PER_REQUEST", 10),
-		GifsPerKeyword: getInt("GIFS_PER_KEYWORD", 15),
+		AudioRequests: getInt("AUDIO_REQUESTS", 3), // 3 req = 6 lagu = 48 credit
 
 		MusicPrompts: getList("MUSIC_PROMPTS", []string{
 			"chill lo-fi hip hop, rainy café, slow jazz piano",
@@ -42,16 +40,6 @@ func Load() *Config {
 			"lo-fi study music, warm vinyl crackle, ambient piano",
 			"lo-fi chill, midnight city rain, mellow beats",
 			"lo-fi dream, soft synth, slow bpm, peaceful",
-		}),
-
-		GifKeywords: getList("GIF_KEYWORDS", []string{
-			"lofi anime rain",
-			"cozy cafe night anime",
-			"pixel art rain city",
-			"anime girl studying rain",
-			"lofi night window rain",
-			"ghibli cozy",
-			"anime rain window lofi",
 		}),
 	}
 }

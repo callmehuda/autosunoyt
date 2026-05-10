@@ -14,14 +14,12 @@ func main() {
 	cfg := config.Load()
 
 	os.MkdirAll(cfg.OutputDir, 0755)
-	os.MkdirAll(cfg.GifDir, 0755)
 
 	fmt.Printf("🎵 Lo-Fi Pipeline\n")
 	fmt.Printf("📅 Date: %s\n\n", time.Now().Format("2006-01-02"))
 
-	gifSvc := services.NewGifService(cfg.GiphyAPIKey, cfg.GifDir)
 	musicSvc := services.NewMusicService(cfg.SunoAPIKey, cfg.OutputDir)
-	videoSvc := services.NewVideoService(cfg.OutputDir, gifSvc)
+	videoSvc := services.NewVideoService(cfg.OutputDir)
 	geminiSvc := services.NewGeminiService(cfg.GeminiAPIKey)
 	ytSvc := services.NewYouTubeService(cfg.YoutubeCredentialsFile, cfg.YoutubeTokenFile)
 
@@ -32,29 +30,25 @@ func main() {
 		log.Fatalf("❌ Gemini: %v", err)
 	}
 
-	// Step 2: Download GIFs
-	fmt.Println("\n━━━ Step 2: Download GIFs ━━━")
-	_, err = gifSvc.BulkDownload(cfg.GifKeywords, cfg.GifsPerKeyword)
+	// Step 2: Generate audio + MV via sunoapi.org
+	// 3 audio requests × 12 cr = 36 cr → 6 lagu
+	// 6 MV            ×  2 cr = 12 cr
+	// Total = 48 credit
+	fmt.Println("\n━━━ Step 2: Generate Songs + Music Videos ━━━")
+	mvPaths, err := musicSvc.GenerateAndMakeMV(cfg.MusicPrompts, cfg.AudioRequests)
 	if err != nil {
-		log.Fatalf("❌ GIF download: %v", err)
+		log.Fatalf("❌ Music+MV gen: %v", err)
 	}
 
-	// Step 3: Generate songs (maks 50 token)
-	fmt.Println("\n━━━ Step 3: Generate Songs ━━━")
-	audioPaths, err := musicSvc.GenerateMultiple(cfg.MusicPrompts, cfg.MaxTokens, cfg.TokensPerRequest)
+	// Step 3: Gabung semua MV jadi 1 video panjang + title overlay
+	fmt.Println("\n━━━ Step 3: Combine Music Videos ━━━")
+	videoPath, err := videoSvc.CombineMVs(mvPaths, meta.Title)
 	if err != nil {
-		log.Fatalf("❌ Music gen: %v", err)
+		log.Fatalf("❌ Combine MVs: %v", err)
 	}
 
-	// Step 4: Render semua lagu + GIF jadi 1 video panjang
-	fmt.Println("\n━━━ Step 4: Render Combined Video ━━━")
-	videoPath, err := videoSvc.RenderCombined(audioPaths, meta.Title)
-	if err != nil {
-		log.Fatalf("❌ Video render: %v", err)
-	}
-
-	// Step 5: Upload YouTube
-	fmt.Println("\n━━━ Step 5: Upload to YouTube ━━━")
+	// Step 4: Upload YouTube
+	fmt.Println("\n━━━ Step 4: Upload to YouTube ━━━")
 	ytURL, err := ytSvc.Upload(videoPath, meta.Title, meta.Description, meta.Tags)
 	if err != nil {
 		log.Fatalf("❌ YouTube upload: %v", err)
