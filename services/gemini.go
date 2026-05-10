@@ -103,7 +103,7 @@ func (g *GeminiService) callAPI(model, prompt string) (*VideoMeta, error) {
 		},
 		GenerationConfig: &geminiGenConfig{
 			Temperature:     0.9,
-			MaxOutputTokens: 512,
+			MaxOutputTokens: 2048,
 		},
 	})
 
