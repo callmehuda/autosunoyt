@@ -2,43 +2,64 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
+	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+	"google.golang.org/api/option"
 	"google.golang.org/api/youtube/v3"
 )
 
 type YouTubeService struct {
-	TokenFile string
+	CredentialsFile string // client_secret.json dari Google Console
+	TokenFile       string // token.json hasil OAuth (berisi refresh_token)
 }
 
-func NewYouTubeService(tokenFile string) *YouTubeService {
-	return &YouTubeService{TokenFile: tokenFile}
+func NewYouTubeService(credentialsFile, tokenFile string) *YouTubeService {
+	return &YouTubeService{
+		CredentialsFile: credentialsFile,
+		TokenFile:       tokenFile,
+	}
 }
 
 func (y *YouTubeService) Upload(videoPath, title, desc string, tags []string) (string, error) {
 	ctx := context.Background()
 
-	b, err := os.ReadFile(y.TokenFile)
+	// Baca client credentials (client_id, client_secret)
+	credBytes, err := os.ReadFile(y.CredentialsFile)
+	if err != nil {
+		return "", fmt.Errorf("baca credentials: %w", err)
+	}
+
+	config, err := google.ConfigFromJSON(credBytes, youtube.YoutubeUploadScope)
+	if err != nil {
+		return "", fmt.Errorf("parse credentials: %w", err)
+	}
+
+	// Baca saved OAuth token (access_token + refresh_token)
+	tokenBytes, err := os.ReadFile(y.TokenFile)
 	if err != nil {
 		return "", fmt.Errorf("baca token: %w", err)
 	}
 
-	config, err := google.ConfigFromJSON(b, youtube.YoutubeUploadScope)
-	if err != nil {
-		return "", err
+	var tok oauth2.Token
+	if err := json.Unmarshal(tokenBytes, &tok); err != nil {
+		return "", fmt.Errorf("parse token: %w", err)
 	}
 
-	client := config.Client(ctx)
-	svc, err := youtube.New(client)
+	// TokenSource auto-refresh pakai refresh_token jika access_token expired
+	tokenSource := config.TokenSource(ctx, &tok)
+
+	svc, err := youtube.NewService(ctx, option.WithTokenSource(tokenSource))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("buat youtube service: %w", err)
 	}
 
 	f, err := os.Open(videoPath)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("buka video: %w", err)
 	}
 	defer f.Close()
 

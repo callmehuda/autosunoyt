@@ -27,14 +27,16 @@ jobs:
 
       - name: Run Pipeline
         env:
-          GIPHY_API_KEY:      ${{ secrets.GIPHY_API_KEY }}
-          SUNO_API_KEY:       ${{ secrets.SUNO_API_KEY }}
-          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
-          YOUTUBE_TOKEN_FILE: ./token.json
-          MAX_TOKENS:         "50"
-          TOKENS_PER_REQUEST: "10"
-          GIFS_PER_KEYWORD:   "15"
+          GIPHY_API_KEY:               ${{ secrets.GIPHY_API_KEY }}
+          SUNO_API_KEY:                ${{ secrets.SUNO_API_KEY }}
+          GEMINI_API_KEY:              ${{ secrets.GEMINI_API_KEY }}
+          YOUTUBE_CREDENTIALS_FILE:    ./credentials.json
+          YOUTUBE_TOKEN_FILE:          ./token.json
+          MAX_TOKENS:                  "50"
+          TOKENS_PER_REQUEST:          "10"
+          GIFS_PER_KEYWORD:            "15"
         run: |
+          echo '${{ secrets.YOUTUBE_CREDENTIALS_JSON }}' > credentials.json
           echo '${{ secrets.YOUTUBE_TOKEN_JSON }}' > token.json
           go mod tidy
           go run main.go

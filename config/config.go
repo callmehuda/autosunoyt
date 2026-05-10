@@ -7,10 +7,11 @@ import (
 )
 
 type Config struct {
-	GiphyAPIKey      string
-	SunoAPIKey       string
-	GeminiAPIKey     string
-	YoutubeTokenFile string
+	GiphyAPIKey             string
+	SunoAPIKey              string
+	GeminiAPIKey            string
+	YoutubeCredentialsFile  string
+	YoutubeTokenFile        string
 	OutputDir        string
 	GifDir           string
 
@@ -23,10 +24,11 @@ type Config struct {
 
 func Load() *Config {
 	return &Config{
-		GiphyAPIKey:      mustEnv("GIPHY_API_KEY"),
-		SunoAPIKey:       mustEnv("SUNO_API_KEY"),
-		GeminiAPIKey:     mustEnv("GEMINI_API_KEY"),
-		YoutubeTokenFile: getOr("YOUTUBE_TOKEN_FILE", "./token.json"),
+		GiphyAPIKey:            mustEnv("GIPHY_API_KEY"),
+		SunoAPIKey:             mustEnv("SUNO_API_KEY"),
+		GeminiAPIKey:           mustEnv("GEMINI_API_KEY"),
+		YoutubeCredentialsFile: getOr("YOUTUBE_CREDENTIALS_FILE", "./credentials.json"),
+		YoutubeTokenFile:       getOr("YOUTUBE_TOKEN_FILE", "./token.json"),
 		OutputDir:        getOr("OUTPUT_DIR", "./output"),
 		GifDir:           getOr("GIF_DIR", "./gifs"),
 
@@ -48,6 +50,7 @@ func Load() *Config {
 			"pixel art rain city",
 			"anime girl studying rain",
 			"lofi night window rain",
+			"ghibli cozy",
 			"anime rain window lofi",
 		}),
 	}

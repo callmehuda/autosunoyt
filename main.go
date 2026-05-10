@@ -23,7 +23,7 @@ func main() {
 	musicSvc := services.NewMusicService(cfg.SunoAPIKey, cfg.OutputDir)
 	videoSvc := services.NewVideoService(cfg.OutputDir, gifSvc)
 	geminiSvc := services.NewGeminiService(cfg.GeminiAPIKey)
-	ytSvc := services.NewYouTubeService(cfg.YoutubeTokenFile)
+	ytSvc := services.NewYouTubeService(cfg.YoutubeCredentialsFile, cfg.YoutubeTokenFile)
 
 	// Step 1: Generate judul & deskripsi via Gemini
 	fmt.Println("━━━ Step 1: Generate Video Metadata (Gemini) ━━━")
