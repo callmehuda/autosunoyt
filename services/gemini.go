@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -24,7 +25,8 @@ type VideoMeta struct {
 }
 
 type geminiRequest struct {
-	Contents []geminiContent `json:"contents"`
+	Contents         []geminiContent   `json:"contents"`
+	GenerationConfig *geminiGenConfig  `json:"generationConfig,omitempty"`
 }
 
 type geminiContent struct {
@@ -35,6 +37,11 @@ type geminiPart struct {
 	Text string `json:"text"`
 }
 
+type geminiGenConfig struct {
+	Temperature     float64 `json:"temperature"`
+	MaxOutputTokens int     `json:"maxOutputTokens"`
+}
+
 type geminiResponse struct {
 	Candidates []struct {
 		Content struct {
@@ -42,10 +49,20 @@ type geminiResponse struct {
 				Text string `json:"text"`
 			} `json:"parts"`
 		} `json:"content"`
+		FinishReason string `json:"finishReason"`
 	} `json:"candidates"`
+	Error *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Status  string `json:"status"`
+	} `json:"error"`
 }
 
-// GenerateVideoMeta generates unique title, description, and tags via Gemini.
+// models to try in order
+var geminiModels = []string{
+	"gemini-2.5-flash",
+}
+
 func (g *GeminiService) GenerateVideoMeta() (*VideoMeta, error) {
 	date := time.Now().Format("January 2, 2006")
 	weekday := time.Now().Weekday().String()
@@ -53,61 +70,100 @@ func (g *GeminiService) GenerateVideoMeta() (*VideoMeta, error) {
 	prompt := fmt.Sprintf(`You are a YouTube lo-fi music channel manager.
 Today is %s (%s).
 
-Generate a YouTube video metadata for a lo-fi music video.
+Generate YouTube video metadata for a lo-fi music video.
 
 Rules:
-- Title must be UNIQUE, poetic, emotional, and feel like a diary entry or a feeling.
-  Examples of style (DO NOT reuse these): 
-  "Relax Your Mind 🌙", "Just a Peace Lo-Fi ☕", "It's Just a Dream ✨", "I Just Want to Sleep 😴",
-  "The Rain Won't Stop 🌧️", "Nobody Knows I'm Here 🌿", "3AM and I'm Still Thinking 💭"
-- Title max 60 characters including emoji
-- Description must be 3-4 sentences, warm and calming in tone, first person perspective
-- Tags: 8-10 relevant tags as array
+- Title: UNIQUE, poetic, emotional, like a diary entry or feeling. Max 60 chars including emoji.
+  Style examples (DO NOT reuse): "Relax Your Mind 🌙", "Just a Peace Lo-Fi ☕", "It's Just a Dream ✨", "I Just Want to Sleep 😴", "The Rain Won't Stop 🌧️"
+- Description: 3-4 sentences, warm and calming tone, first person perspective.
+- Tags: array of 8-10 relevant strings.
 
-Respond ONLY with raw JSON, no markdown, no backticks:
-{
-  "title": "...",
-  "description": "...",
-  "tags": ["...", "..."]
-}`, date, weekday)
+Respond ONLY with valid JSON, no markdown, no backticks, no extra text:
+{"title":"...","description":"...","tags":["..."]}`, date, weekday)
 
+	var lastErr error
+	for _, model := range geminiModels {
+		meta, err := g.callAPI(model, prompt)
+		if err != nil {
+			fmt.Printf("   ⚠️  Model %s failed: %v\n", model, err)
+			lastErr = err
+			continue
+		}
+		fmt.Printf("🤖 Gemini [%s]:\n   Title: %s\n   Tags:  %v\n", model, meta.Title, meta.Tags)
+		return meta, nil
+	}
+
+	return nil, fmt.Errorf("semua model gagal, last error: %w", lastErr)
+}
+
+func (g *GeminiService) callAPI(model, prompt string) (*VideoMeta, error) {
 	reqBody, _ := json.Marshal(geminiRequest{
 		Contents: []geminiContent{
 			{Parts: []geminiPart{{Text: prompt}}},
 		},
+		GenerationConfig: &geminiGenConfig{
+			Temperature:     0.9,
+			MaxOutputTokens: 512,
+		},
 	})
 
 	url := fmt.Sprintf(
-		"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=%s",
-		g.APIKey,
+		"https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s",
+		model, g.APIKey,
 	)
 
 	resp, err := http.Post(url, "application/json", bytes.NewReader(reqBody))
 	if err != nil {
-		return nil, fmt.Errorf("gemini request: %w", err)
+		return nil, fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
 
+	// Read raw body for debugging
+	rawBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+
+	fmt.Printf("   📡 HTTP %d | body preview: %.200s\n", resp.StatusCode, string(rawBody))
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("http %d: %s", resp.StatusCode, string(rawBody))
+	}
+
 	var result geminiResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(rawBody, &result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	if len(result.Candidates) == 0 || len(result.Candidates[0].Content.Parts) == 0 {
-		return nil, fmt.Errorf("gemini returned empty response")
+	if result.Error != nil {
+		return nil, fmt.Errorf("api error %d: %s", result.Error.Code, result.Error.Message)
 	}
 
-	raw := strings.TrimSpace(result.Candidates[0].Content.Parts[0].Text)
+	if len(result.Candidates) == 0 {
+		return nil, fmt.Errorf("no candidates in response")
+	}
+
+	candidate := result.Candidates[0]
+	if len(candidate.Content.Parts) == 0 {
+		return nil, fmt.Errorf("empty parts (finishReason: %s)", candidate.FinishReason)
+	}
+
+	raw := strings.TrimSpace(candidate.Content.Parts[0].Text)
+
+	// Strip markdown code fences kalau ada
+	raw = strings.TrimPrefix(raw, "```json")
+	raw = strings.TrimPrefix(raw, "```")
+	raw = strings.TrimSuffix(raw, "```")
+	raw = strings.TrimSpace(raw)
 
 	var meta VideoMeta
 	if err := json.Unmarshal([]byte(raw), &meta); err != nil {
-		return nil, fmt.Errorf("parse json: %w\nraw: %s", err, raw)
+		return nil, fmt.Errorf("parse json: %w | raw: %s", err, raw)
 	}
 
 	if meta.Title == "" || meta.Description == "" {
-		return nil, fmt.Errorf("gemini returned incomplete metadata: %+v", meta)
+		return nil, fmt.Errorf("incomplete metadata: title=%q desc=%q", meta.Title, meta.Description)
 	}
 
-	fmt.Printf("🤖 Gemini generated:\n   Title: %s\n   Tags:  %v\n", meta.Title, meta.Tags)
 	return &meta, nil
 }
