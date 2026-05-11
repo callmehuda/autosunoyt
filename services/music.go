@@ -85,12 +85,13 @@ type mvDetailResp struct {
 	Code int    `json:"code"`
 	Msg  string `json:"msg"`
 	Data struct {
-		TaskID   string `json:"taskId"`
-		Status   string `json:"status"`
-		Response struct {
+		TaskID      string `json:"taskId"`
+		SuccessFlag string `json:"successFlag"`
+		Response    struct {
 			VideoUrl string `json:"videoUrl"`
 		} `json:"response"`
-		ErrorMessage string `json:"errorMessage"`
+		ErrorCode    interface{} `json:"errorCode"`
+		ErrorMessage interface{} `json:"errorMessage"`
 	} `json:"data"`
 }
 
@@ -270,7 +271,7 @@ func (m *MusicService) pollMV(taskID string) (string, error) {
 		time.Sleep(15 * time.Second)
 
 		req, _ := http.NewRequest("GET",
-			kieAPIBase+"/mp4/details?taskId="+taskID, nil)
+			kieAPIBase+"/mp4/record-info?taskId="+taskID, nil)
 		req.Header.Set("Authorization", "Bearer "+m.APIKey)
 
 		resp, err := http.DefaultClient.Do(req)
@@ -281,16 +282,16 @@ func (m *MusicService) pollMV(taskID string) (string, error) {
 		json.NewDecoder(resp.Body).Decode(&r)
 		resp.Body.Close()
 
-		fmt.Printf("   ⏳ [%d/30] MV %s\n", i, r.Data.Status)
+		fmt.Printf("   ⏳ [%d/30] MV %s\n", i, r.Data.SuccessFlag)
 
-		switch r.Data.Status {
+		switch r.Data.SuccessFlag {
 		case "SUCCESS":
 			if r.Data.Response.VideoUrl == "" {
 				return "", fmt.Errorf("SUCCESS tapi videoUrl kosong")
 			}
 			return r.Data.Response.VideoUrl, nil
 		case "FAILED", "ERROR":
-			return "", fmt.Errorf("mv failed: %s", r.Data.ErrorMessage)
+			return "", fmt.Errorf("mv failed: %v", r.Data.ErrorMessage)
 		}
 	}
 	return "", fmt.Errorf("timeout MV polling")
