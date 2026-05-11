@@ -21,20 +21,14 @@ jobs:
       - name: Install FFmpeg
         run: sudo apt-get install -y ffmpeg
 
-      - name: Download Special Elite font (lo-fi typewriter feel)
+      - name: Download Special Elite font
         run: |
-          mkdir -p /tmp/fonts
-          curl -sL "https://fonts.gstatic.com/s/specialelite/v18/XLYgIZbkc46tvqgoxjTotC-T-wRed.woff2" -o /tmp/fonts/SpecialElite.woff2 || true
-          # Fallback: download zip dari Google Fonts
-          curl -sL "https://fonts.google.com/download?family=Special+Elite" -o /tmp/fonts/special-elite.zip || true
-          if [ -f /tmp/fonts/special-elite.zip ]; then
-            unzip -q /tmp/fonts/special-elite.zip -d /tmp/fonts/
-          fi
-          # Cari TTF file
-          FONT=$(find /tmp/fonts -name "*.ttf" 2>/dev/null | head -1)
-          if [ -n "$FONT" ]; then
-            echo "✅ Font ditemukan: $FONT"
-            echo "LOFI_FONT_PATH=$FONT" >> $GITHUB_ENV
+          curl -sL "https://www.dafontfree.io/wp-content/uploads/2018/09/Special_Elite.zip" \
+            -o /tmp/SpecialElite.zip
+          unzip -q /tmp/SpecialElite.zip -d /tmp/fonts/
+          if [ -f /tmp/fonts/SpecialElite-Regular.ttf ]; then
+            echo "✅ Font ready"
+            echo "LOFI_FONT_PATH=/tmp/fonts/SpecialElite-Regular.ttf" >> $GITHUB_ENV
           else
             echo "⚠️  Font tidak ditemukan, pakai default sistem"
           fi
