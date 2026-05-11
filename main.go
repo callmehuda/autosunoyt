@@ -19,7 +19,7 @@ func main() {
 	fmt.Printf("📅 Date: %s\n\n", time.Now().Format("2006-01-02"))
 
 	musicSvc := services.NewMusicService(cfg.SunoAPIKey, cfg.OutputDir)
-	videoSvc := services.NewVideoService(cfg.OutputDir)
+	videoSvc := services.NewVideoService(cfg.OutputDir, cfg.FontPath)
 	geminiSvc := services.NewGeminiService(cfg.GeminiAPIKey)
 	ytSvc := services.NewYouTubeService(cfg.YoutubeCredentialsFile, cfg.YoutubeTokenFile)
 
@@ -27,7 +27,15 @@ func main() {
 	fmt.Println("━━━ Step 1: Generate Video Metadata (Gemini) ━━━")
 	meta, err := geminiSvc.GenerateVideoMeta()
 	if err != nil {
-		log.Fatalf("❌ Gemini: %v", err)
+		log.Fatalf("❌ Gemini metadata: %v", err)
+	}
+
+	// Step 1b: Generate overlay phrases per segment
+	fmt.Println("\n━━━ Step 1b: Generate Segment Phrases (Gemini) ━━━")
+	phrases, err := geminiSvc.GenerateSegmentPhrases(cfg.AudioRequests * 2)
+	if err != nil {
+		fmt.Printf("⚠️  Phrase gen failed (%v) — pakai fallback\n", err)
+		phrases = nil // video.go akan pakai fallback
 	}
 
 	// Step 2: Generate audio + MV via sunoapi.org
@@ -42,7 +50,7 @@ func main() {
 
 	// Step 3: Gabung semua MV jadi 1 video panjang + title overlay
 	fmt.Println("\n━━━ Step 3: Combine Music Videos ━━━")
-	videoPath, err := videoSvc.CombineMVs(mvPaths, meta.Title)
+	videoPath, err := videoSvc.CombineMVs(mvPaths, phrases)
 	if err != nil {
 		log.Fatalf("❌ Combine MVs: %v", err)
 	}

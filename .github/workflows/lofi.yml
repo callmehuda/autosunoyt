@@ -2,7 +2,7 @@ name: Lo-Fi Daily Upload
 
 on:
   schedule:
-    - cron: '0 2 * * *'   # Setiap hari jam 02:00 UTC (09:00 WIB)
+    - cron: '24 2 * * *'   # Setiap hari jam 02:00 UTC (09:00 WIB)
   workflow_dispatch:        # Manual trigger dari GitHub UI
 
 jobs:
@@ -21,13 +21,31 @@ jobs:
       - name: Install FFmpeg
         run: sudo apt-get install -y ffmpeg
 
+      - name: Download Special Elite font (lo-fi typewriter feel)
+        run: |
+          mkdir -p /tmp/fonts
+          curl -sL "https://fonts.gstatic.com/s/specialelite/v18/XLYgIZbkc46tvqgoxjTotC-T-wRed.woff2" -o /tmp/fonts/SpecialElite.woff2 || true
+          # Fallback: download zip dari Google Fonts
+          curl -sL "https://fonts.google.com/download?family=Special+Elite" -o /tmp/fonts/special-elite.zip || true
+          if [ -f /tmp/fonts/special-elite.zip ]; then
+            unzip -q /tmp/fonts/special-elite.zip -d /tmp/fonts/
+          fi
+          # Cari TTF file
+          FONT=$(find /tmp/fonts -name "*.ttf" 2>/dev/null | head -1)
+          if [ -n "$FONT" ]; then
+            echo "✅ Font ditemukan: $FONT"
+            echo "LOFI_FONT_PATH=$FONT" >> $GITHUB_ENV
+          else
+            echo "⚠️  Font tidak ditemukan, pakai default sistem"
+          fi
+
       - name: Create output dir
         run: mkdir -p output
 
       - name: Validate secrets
         run: |
           missing=""
-          [ -z "${{ secrets.SUNO_API_KEY }}" ]              && missing="$missing SUNO_API_KEY"
+          [ -z "${{ secrets.KIE_API_KEY }}" ]               && missing="$missing KIE_API_KEY"
           [ -z "${{ secrets.GEMINI_API_KEY }}" ]            && missing="$missing GEMINI_API_KEY"
           [ -z "${{ secrets.YOUTUBE_CREDENTIALS_JSON }}" ]  && missing="$missing YOUTUBE_CREDENTIALS_JSON"
           [ -z "${{ secrets.YOUTUBE_TOKEN_JSON }}" ]        && missing="$missing YOUTUBE_TOKEN_JSON"
@@ -39,12 +57,13 @@ jobs:
 
       - name: Run Pipeline
         env:
-          SUNO_API_KEY:                ${{ secrets.SUNO_API_KEY }}
+          SUNO_API_KEY:                ${{ secrets.KIE_API_KEY }}
           GEMINI_API_KEY:              ${{ secrets.GEMINI_API_KEY }}
           YOUTUBE_CREDENTIALS_FILE:    ./credentials.json
           YOUTUBE_TOKEN_FILE:          ./token.json
-          AUDIO_REQUESTS:              "3"
+          AUDIO_REQUESTS:              "5"
           OUTPUT_DIR:                  "./output"
+          # LOFI_FONT_PATH diset otomatis dari step Download Font di atas
         run: |
           echo '${{ secrets.YOUTUBE_CREDENTIALS_JSON }}' > credentials.json
           echo '${{ secrets.YOUTUBE_TOKEN_JSON }}' > token.json

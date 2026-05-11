@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 type GeminiService struct {
@@ -25,8 +24,8 @@ type VideoMeta struct {
 }
 
 type geminiRequest struct {
-	Contents         []geminiContent   `json:"contents"`
-	GenerationConfig *geminiGenConfig  `json:"generationConfig,omitempty"`
+	Contents         []geminiContent  `json:"contents"`
+	GenerationConfig *geminiGenConfig `json:"generationConfig,omitempty"`
 }
 
 type geminiContent struct {
@@ -54,50 +53,99 @@ type geminiResponse struct {
 	Error *struct {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
-		Status  string `json:"status"`
 	} `json:"error"`
 }
 
-// models to try in order
 var geminiModels = []string{
 	"gemini-2.5-flash-preview-05-20",
 	"gemini-2.5-flash",
 }
 
+// GenerateVideoMeta generates YouTube title, description, and tags.
 func (g *GeminiService) GenerateVideoMeta() (*VideoMeta, error) {
-	date := time.Now().Format("January 2, 2006")
-	weekday := time.Now().Weekday().String()
-
-	prompt := fmt.Sprintf(`You are a YouTube lo-fi music channel manager.
-Today is %s (%s).
+	prompt := `You are a YouTube lo-fi music channel manager.
 
 Generate YouTube video metadata for a lo-fi music video.
 
 Rules:
-- Title: UNIQUE, poetic, emotional, like a diary entry or feeling. Max 60 chars including emoji.
+- Title: UNIQUE, poetic, emotional, like a diary entry or feeling. Max 60 chars including emoji. Do NOT reference days, dates, or time of year.
   Style examples (DO NOT reuse): "Relax Your Mind 🌙", "Just a Peace Lo-Fi ☕", "It's Just a Dream ✨", "I Just Want to Sleep 😴", "The Rain Won't Stop 🌧️"
 - Description: 3-4 sentences, warm and calming tone, first person perspective.
 - Tags: array of 8-10 relevant strings.
 
 Respond ONLY with valid JSON, no markdown, no backticks, no extra text:
-{"title":"...","description":"...","tags":["..."]}`, date, weekday)
+{"title":"...","description":"...","tags":["..."]}`
 
-	var lastErr error
 	for _, model := range geminiModels {
-		meta, err := g.callAPI(model, prompt)
+		raw, err := g.callRaw(model, prompt)
 		if err != nil {
 			fmt.Printf("   ⚠️  Model %s failed: %v\n", model, err)
-			lastErr = err
 			continue
 		}
+
+		var meta VideoMeta
+		if err := json.Unmarshal([]byte(raw), &meta); err != nil {
+			fmt.Printf("   ⚠️  Parse failed: %v\n", err)
+			continue
+		}
+		if meta.Title == "" || meta.Description == "" {
+			fmt.Printf("   ⚠️  Incomplete metadata\n")
+			continue
+		}
+
 		fmt.Printf("🤖 Gemini [%s]:\n   Title: %s\n   Tags:  %v\n", model, meta.Title, meta.Tags)
-		return meta, nil
+		return &meta, nil
 	}
 
-	return nil, fmt.Errorf("semua model gagal, last error: %w", lastErr)
+	return nil, fmt.Errorf("semua model gagal generate metadata")
 }
 
-func (g *GeminiService) callAPI(model, prompt string) (*VideoMeta, error) {
+// GenerateSegmentPhrases generates lo-fi overlay phrases for each video segment.
+func (g *GeminiService) GenerateSegmentPhrases(count int) ([]string, error) {
+	prompt := fmt.Sprintf(`You are a lo-fi music video creator.
+
+Generate %d short phrases to display as text overlays on a lo-fi music video.
+
+Rules:
+- Each phrase is 2-5 words, all lowercase
+- Calming, introspective, lo-fi vibe — like a gentle reminder or feeling
+- Style examples (DO NOT reuse these exact ones):
+  "enjoy the music", "calm and relax", "just keep going",
+  "breathe easy", "let it flow", "find your peace",
+  "close your eyes", "drift away slowly", "it's okay now"
+- Each phrase must be UNIQUE
+- No punctuation at the end, no emoji
+
+Respond ONLY with a JSON array of strings, no markdown, no backticks:
+["phrase one","phrase two",...]`, count)
+
+	for _, model := range geminiModels {
+		raw, err := g.callRaw(model, prompt)
+		if err != nil {
+			fmt.Printf("   ⚠️  Model %s failed: %v\n", model, err)
+			continue
+		}
+
+		var phrases []string
+		if err := json.Unmarshal([]byte(raw), &phrases); err != nil {
+			fmt.Printf("   ⚠️  Parse failed: %v | raw: %s\n", err, raw)
+			continue
+		}
+		if len(phrases) < count {
+			fmt.Printf("   ⚠️  Got %d phrases, wanted %d — retrying\n", len(phrases), count)
+			continue
+		}
+
+		result := phrases[:count]
+		fmt.Printf("🤖 Gemini phrases: %v\n", result)
+		return result, nil
+	}
+
+	return nil, fmt.Errorf("gagal generate segment phrases")
+}
+
+// callRaw calls Gemini API and returns the raw text response (stripped of markdown fences).
+func (g *GeminiService) callRaw(model, prompt string) (string, error) {
 	reqBody, _ := json.Marshal(geminiRequest{
 		Contents: []geminiContent{
 			{Parts: []geminiPart{{Text: prompt}}},
@@ -115,56 +163,41 @@ func (g *GeminiService) callAPI(model, prompt string) (*VideoMeta, error) {
 
 	resp, err := http.Post(url, "application/json", bytes.NewReader(reqBody))
 	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
+		return "", fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// Read raw body for debugging
 	rawBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
+		return "", fmt.Errorf("read body: %w", err)
 	}
 
-	fmt.Printf("   📡 HTTP %d | body preview: %.200s\n", resp.StatusCode, string(rawBody))
+	fmt.Printf("   📡 HTTP %d | preview: %.200s\n", resp.StatusCode, string(rawBody))
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("http %d: %s", resp.StatusCode, string(rawBody))
+		return "", fmt.Errorf("http %d: %s", resp.StatusCode, string(rawBody))
 	}
 
 	var result geminiResponse
 	if err := json.Unmarshal(rawBody, &result); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+		return "", fmt.Errorf("decode: %w", err)
 	}
-
 	if result.Error != nil {
-		return nil, fmt.Errorf("api error %d: %s", result.Error.Code, result.Error.Message)
+		return "", fmt.Errorf("api error %d: %s", result.Error.Code, result.Error.Message)
+	}
+	if len(result.Candidates) == 0 || len(result.Candidates[0].Content.Parts) == 0 {
+		return "", fmt.Errorf("empty response (finishReason: %s)",
+			func() string {
+				if len(result.Candidates) > 0 {
+					return result.Candidates[0].FinishReason
+				}
+				return "no candidates"
+			}())
 	}
 
-	if len(result.Candidates) == 0 {
-		return nil, fmt.Errorf("no candidates in response")
-	}
-
-	candidate := result.Candidates[0]
-	if len(candidate.Content.Parts) == 0 {
-		return nil, fmt.Errorf("empty parts (finishReason: %s)", candidate.FinishReason)
-	}
-
-	raw := strings.TrimSpace(candidate.Content.Parts[0].Text)
-
-	// Strip markdown code fences kalau ada
+	raw := strings.TrimSpace(result.Candidates[0].Content.Parts[0].Text)
 	raw = strings.TrimPrefix(raw, "```json")
 	raw = strings.TrimPrefix(raw, "```")
 	raw = strings.TrimSuffix(raw, "```")
-	raw = strings.TrimSpace(raw)
-
-	var meta VideoMeta
-	if err := json.Unmarshal([]byte(raw), &meta); err != nil {
-		return nil, fmt.Errorf("parse json: %w | raw: %s", err, raw)
-	}
-
-	if meta.Title == "" || meta.Description == "" {
-		return nil, fmt.Errorf("incomplete metadata: title=%q desc=%q", meta.Title, meta.Description)
-	}
-
-	return &meta, nil
+	return strings.TrimSpace(raw), nil
 }

@@ -20,6 +20,7 @@ type Config struct {
 	// Total = AudioRequests × (12 + 4) = AudioRequests × 16
 	// Dengan 3 requests: 3×16 = 48 credits (dari 50)
 	AudioRequests int
+	FontPath      string // path ke Special Elite TTF
 
 	MusicPrompts []string
 }
@@ -32,7 +33,8 @@ func Load() *Config {
 		YoutubeTokenFile:       getOr("YOUTUBE_TOKEN_FILE", "./token.json"),
 		OutputDir:              getOr("OUTPUT_DIR", "./output"),
 
-		AudioRequests: getInt("AUDIO_REQUESTS", 3), // 3 req = 6 lagu = 48 credit
+		AudioRequests: getInt("AUDIO_REQUESTS", 5),
+		FontPath:      getOr("LOFI_FONT_PATH", ""),
 
 		MusicPrompts: getList("MUSIC_PROMPTS", []string{
 			"chill lo-fi hip hop, rainy café, slow jazz piano",
